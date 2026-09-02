@@ -1,0 +1,12 @@
+[submodule "sportservices/moneyball"]
+	path = sportservices/moneyball
+	url = https://github.com/JasonDoug/Moneyball.git
+[submodule "sportservices/netpredict"]
+	path = sportservices/netpredict
+	url = https://github.com/JasonDoug/NetPredict.git
+[submodule "sportservices/nofreelocks"]
+	path = sportservices/nofreelocks
+	url = https://github.com/JasonDoug/NoFreeLocks.git
+[submodule "sportservices/saturdayslate"]
+	path = sportservices/saturdayslate
+	url = https://github.com/JasonDoug/SaturdaySlate.git
