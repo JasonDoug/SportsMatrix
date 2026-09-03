@@ -282,12 +282,15 @@ def process_sports_chat(req: ChatRequest) -> ChatResponse:
         else:
             slate_res = tool_predict_mlb_slate(date=today_str)
             tools_used.append(ToolCallLog(tool_name="predict_mlb_slate", args={"date": today_str}, summary=f"Retrieved {slate_res.get('total_games', 0)} MLB predictions"))
-            preds = slate_res.get("predictions", [])[:3]
-            pred_lines = "\n".join([f"- **{p['matchup']}**: Pick **{p['model_pick']}** (Win Prob: {p['pick_win_prob']}, Proj: {p['proj_score']}, EV: {p['expected_ev']})" for p in preds])
+            preds = slate_res.get("predictions", [])[:6]
+            pred_lines = "\n".join([
+                f"- **{p['matchup']}**: Pick **{p['model_pick']}** ({p['pick_win_prob']}, EV: {p['expected_ev']}) | Status: **{p['status']}** | Score: `{p['actual_score']}` | Outcome: {p['outcome']}"
+                for p in preds
+            ])
             results_summary.append(f"⚾ **Moneyball MLB Slate Predictions ({today_str})**:\n"
                                    f"- Total Games: {slate_res.get('total_games')}\n"
-                                   f"- Verified Hit Rate: {slate_res.get('hit_rate')}\n"
-                                   f"- Key Matches:\n{pred_lines}")
+                                   f"- Completed Hits/Misses: {slate_res.get('hits')} W / {slate_res.get('misses')} L ({slate_res.get('hit_rate')})\n"
+                                   f"- Game Slate Details:\n{pred_lines}")
 
     # 2. Basketball (NBA, WNBA, NCAAM, NCAAW) detection
     if any(k in prompt_lower for k in ["nba", "wnba", "ncaam", "ncaaw", "basketball", "hoops", "netpredict"]):
