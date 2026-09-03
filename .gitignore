@@ -21,3 +21,4 @@ ENV/
 .pytest_cache/
 catboost_info/
 sportsmatrix_config.json
+.gemini/

@@ -34,11 +34,12 @@ logger = logging.getLogger(__name__)
 
 # --- TOOL IMPLEMENTATIONS ---
 
-def tool_predict_mlb_slate(date: str = "2025-08-30", model_type: str = "xgboost") -> Dict[str, Any]:
-    """Fetches daily slate predictions and win probabilities for MLB games (Moneyball Engine)."""
+def tool_predict_mlb_slate(date: Optional[str] = None, model_type: str = "xgboost") -> Dict[str, Any]:
+    """Fetches daily slate predictions and win probabilities for MLB games (Moneyball Engine). Defaults to dynamic current date."""
+    target_date = date if date else datetime.now().strftime("%Y-%m-%d")
     try:
         from mlb_engine.server import get_slate_predictions
-        resp = get_slate_predictions(date=date, model_type=model_type)
+        resp = get_slate_predictions(date=target_date, model_type=model_type)
         return json.loads(resp.body.decode("utf-8"))
     except Exception as e:
         logger.error(f"Error calling MLB predict: {e}")
@@ -57,11 +58,12 @@ def tool_simulate_mlb_matchup(home_team: str = "LAD", away_team: str = "SF", num
         return {"error": str(e), "service": "Moneyball MLB"}
 
 
-def tool_predict_basketball(league: str = "nba", date: str = "2026-09-02") -> Dict[str, Any]:
-    """Fetches basketball game predictions for NBA, WNBA, NCAAM, or NCAAW (NetPredict Engine)."""
+def tool_predict_basketball(league: str = "nba", date: Optional[str] = None) -> Dict[str, Any]:
+    """Fetches basketball game predictions for NBA, WNBA, NCAAM, or NCAAW (NetPredict Engine). Defaults to dynamic current date."""
+    target_date = date if date else datetime.now().strftime("%Y-%m-%d")
     try:
         from backend.app.main import get_league_predictions
-        return get_league_predictions(league=league, date=date)
+        return get_league_predictions(league=league, date=target_date)
     except Exception as e:
         logger.error(f"Error calling Basketball predict: {e}")
         return {"error": str(e), "service": "NetPredict Basketball"}
@@ -115,24 +117,26 @@ def tool_extract_nfl_news(text: str) -> Dict[str, Any]:
         return {"error": str(e), "service": "NoFreeLocks NFL"}
 
 
-def tool_predict_cfb_slate(season: int = 2025, week: int = 13, team: Optional[str] = None) -> Dict[str, Any]:
-    """Fetches College Football game predictions and line edges (SaturdaySlate Engine)."""
+def tool_predict_cfb_slate(season: Optional[int] = None, week: int = 13, team: Optional[str] = None) -> Dict[str, Any]:
+    """Fetches College Football game predictions and line edges (SaturdaySlate Engine). Defaults to current year."""
+    target_season = season if season else datetime.now().year
     try:
         from src.api.server import predict_week, PredictRequest
-        req = PredictRequest(season=season, week=week, team=team)
+        req = PredictRequest(season=target_season, week=week, team=team)
         results = predict_week(req)
-        return {"season": season, "week": week, "predictions": results}
+        return {"season": target_season, "week": week, "predictions": results}
     except Exception as e:
         logger.error(f"Error calling CFB predict: {e}")
         return {"error": str(e), "service": "SaturdaySlate CFB"}
 
 
-def tool_get_cfb_ratings(season: int = 2025) -> Dict[str, Any]:
-    """Fetches dynamic Elo and Glicko-2 ratings for College Football teams (SaturdaySlate Engine)."""
+def tool_get_cfb_ratings(season: Optional[int] = None) -> Dict[str, Any]:
+    """Fetches dynamic Elo and Glicko-2 ratings for College Football teams (SaturdaySlate Engine). Defaults to current year."""
+    target_season = season if season else datetime.now().year
     try:
         from src.api.server import get_team_ratings
-        ratings = get_team_ratings(season=season)
-        return {"season": season, "ratings_count": len(ratings), "ratings": [r.model_dump() for r in ratings[:15]]}
+        ratings = get_team_ratings(season=target_season)
+        return {"season": target_season, "ratings_count": len(ratings), "ratings": [r.model_dump() for r in ratings[:15]]}
     except Exception as e:
         logger.error(f"Error calling CFB ratings: {e}")
         return {"error": str(e), "service": "SaturdaySlate CFB"}
@@ -233,6 +237,8 @@ def process_sports_chat(req: ChatRequest) -> ChatResponse:
     Dynamically loads settings and uses Pydantic AI for active providers or fallback tool execution.
     """
     settings = load_settings()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
     
     # Allow prompt-level override of model or provider if specified
     if req.model and ":" in req.model:
@@ -274,11 +280,11 @@ def process_sports_chat(req: ChatRequest) -> ChatResponse:
                                    f"- Projected Score: {sim_res.get('expected_score')}\n"
                                    f"- Over 8.5 Runs Prob: {sim_res.get('over_8_5_prob')}")
         else:
-            slate_res = tool_predict_mlb_slate(date="2025-08-30")
-            tools_used.append(ToolCallLog(tool_name="predict_mlb_slate", args={"date": "2025-08-30"}, summary=f"Retrieved {slate_res.get('total_games', 0)} MLB predictions"))
+            slate_res = tool_predict_mlb_slate(date=today_str)
+            tools_used.append(ToolCallLog(tool_name="predict_mlb_slate", args={"date": today_str}, summary=f"Retrieved {slate_res.get('total_games', 0)} MLB predictions"))
             preds = slate_res.get("predictions", [])[:3]
             pred_lines = "\n".join([f"- **{p['matchup']}**: Pick **{p['model_pick']}** (Win Prob: {p['pick_win_prob']}, Proj: {p['proj_score']}, EV: {p['expected_ev']})" for p in preds])
-            results_summary.append(f"⚾ **Moneyball MLB Slate Predictions (2025-08-30)**:\n"
+            results_summary.append(f"⚾ **Moneyball MLB Slate Predictions ({today_str})**:\n"
                                    f"- Total Games: {slate_res.get('total_games')}\n"
                                    f"- Verified Hit Rate: {slate_res.get('hit_rate')}\n"
                                    f"- Key Matches:\n{pred_lines}")
@@ -291,14 +297,14 @@ def process_sports_chat(req: ChatRequest) -> ChatResponse:
             if lg in prompt_lower:
                 league = lg
                 break
-        bk_res = tool_predict_basketball(league=league, date="2026-09-02")
-        tools_used.append(ToolCallLog(tool_name="predict_basketball", args={"league": league, "date": "2026-09-02"}, summary=f"Evaluated {bk_res.get('games_count', 0)} {league.upper()} games"))
+        bk_res = tool_predict_basketball(league=league, date=today_str)
+        tools_used.append(ToolCallLog(tool_name="predict_basketball", args={"league": league, "date": today_str}, summary=f"Evaluated {bk_res.get('games_count', 0)} {league.upper()} games"))
         preds = bk_res.get("predictions", [])[:2]
         pred_lines = []
         for p in preds:
             pred_obj = p.get("prediction", {})
             pred_lines.append(f"- **Game {p.get('game_id')}**: Home Rating: {pred_obj.get('home_off_rating')}/{pred_obj.get('home_def_rating')}, Away Rating: {pred_obj.get('away_off_rating')}/{pred_obj.get('away_def_rating')}, Proj Spread: {pred_obj.get('predicted_spread')}, Proj Total: {pred_obj.get('predicted_total')}")
-        results_summary.append(f"🏀 **NetPredict {league.upper()} Predictions (2026-09-02)**:\n"
+        results_summary.append(f"🏀 **NetPredict {league.upper()} Predictions ({today_str})**:\n"
                                f"- Odds Source: {bk_res.get('odds_source')}\n"
                                f"- Evaluated Games ({bk_res.get('games_count')}):\n" + "\n".join(pred_lines))
 
@@ -322,39 +328,39 @@ def process_sports_chat(req: ChatRequest) -> ChatResponse:
     if any(k in prompt_lower for k in ["cfb", "college football", "saturdayslate", "sec", "big ten", "alabama", "georgia", "ohio state"]):
         service_sources.append("SaturdaySlate (CFB)")
         if "rating" in prompt_lower or "elo" in prompt_lower:
-            ratings_res = tool_get_cfb_ratings(season=2025)
-            tools_used.append(ToolCallLog(tool_name="get_cfb_ratings", args={"season": 2025}, summary="Fetched CFB team ratings"))
+            ratings_res = tool_get_cfb_ratings(season=current_year)
+            tools_used.append(ToolCallLog(tool_name="get_cfb_ratings", args={"season": current_year}, summary="Fetched CFB team ratings"))
             top_teams = ", ".join([f"{r['team']} (Elo: {r['elo_rating']})" for r in ratings_res.get("ratings", [])[:5]])
-            results_summary.append(f"🏈 **SaturdaySlate CFB Team Ratings (2025)**:\n- Top Teams: {top_teams}")
+            results_summary.append(f"🏈 **SaturdaySlate CFB Team Ratings ({current_year})**:\n- Top Teams: {top_teams}")
         else:
-            cfb_res = tool_predict_cfb_slate(season=2025, week=13)
-            tools_used.append(ToolCallLog(tool_name="predict_cfb_slate", args={"season": 2025, "week": 13}, summary="Generated CFB Week 13 predictions"))
+            cfb_res = tool_predict_cfb_slate(season=current_year, week=13)
+            tools_used.append(ToolCallLog(tool_name="predict_cfb_slate", args={"season": current_year, "week": 13}, summary="Generated CFB Week 13 predictions"))
             preds = cfb_res.get("predictions", [])[:3]
             pred_lines = "\n".join([f"- **{p.get('matchup', 'Game')}**: Pick **{p.get('pick', 'N/A')}** (Spread: {p.get('market_spread')}, Line Edge: {p.get('spread_edge')})" for p in preds]) if preds else "Week 13 slate analyzed."
-            results_summary.append(f"🏈 **SaturdaySlate College Football Predictions (Season 2025 Week 13)**:\n{pred_lines}")
+            results_summary.append(f"🏈 **SaturdaySlate College Football Predictions (Season {current_year} Week 13)**:\n{pred_lines}")
 
     # If prompt is general or didn't trigger specific sport keywords, provide overview across all 4 services
     if not results_summary:
         service_sources = ["Moneyball (MLB)", "NetPredict (Basketball)", "NoFreeLocks (NFL)", "SaturdaySlate (CFB)"]
-        mlb = tool_predict_mlb_slate(date="2025-08-30")
-        bk = tool_predict_basketball(league="nba", date="2026-09-02")
+        mlb = tool_predict_mlb_slate(date=today_str)
+        bk = tool_predict_basketball(league="nba", date=today_str)
         nfl = tool_predict_nfl_game(home_team="KC", away_team="SF")
-        cfb = tool_get_cfb_ratings(season=2025)
+        cfb = tool_get_cfb_ratings(season=current_year)
 
         tools_used.extend([
-            ToolCallLog(tool_name="predict_mlb_slate", args={}, summary="MLB slate summary"),
-            ToolCallLog(tool_name="predict_basketball", args={"league": "nba"}, summary="NBA predictions summary"),
+            ToolCallLog(tool_name="predict_mlb_slate", args={"date": today_str}, summary="MLB slate summary"),
+            ToolCallLog(tool_name="predict_basketball", args={"league": "nba", "date": today_str}, summary="NBA predictions summary"),
             ToolCallLog(tool_name="predict_nfl_game", args={"home": "KC", "away": "SF"}, summary="NFL matchup summary"),
-            ToolCallLog(tool_name="get_cfb_ratings", args={}, summary="CFB ratings summary"),
+            ToolCallLog(tool_name="get_cfb_ratings", args={"season": current_year}, summary="CFB ratings summary"),
         ])
 
         top_cfb = ", ".join([r["team"] for r in cfb.get("ratings", [])[:3]])
         results_summary.append(
             f"Welcome to **SportsMatrix AI**! I am connected to all 4 prediction engines:\n\n"
-            f"1. ⚾ **Moneyball (MLB)**: {mlb.get('total_games', 0)} slate games analyzed for 2025-08-30 with a {mlb.get('hit_rate', 'N/A')} hit rate.\n"
-            f"2. 🏀 **NetPredict (NBA/WNBA/NCAAM/NCAAW)**: Live basketball analytics covering {bk.get('games_count', 0)} NBA games.\n"
+            f"1. ⚾ **Moneyball (MLB)**: {mlb.get('total_games', 0)} slate games analyzed for {today_str} with a {mlb.get('hit_rate', 'N/A')} hit rate.\n"
+            f"2. 🏀 **NetPredict (NBA/WNBA/NCAAM/NCAAW)**: Live basketball analytics covering {bk.get('games_count', 0)} NBA games for {today_str}.\n"
             f"3. 🏈 **NoFreeLocks (NFL)**: KC vs SF projected home win prob is {nfl.get('win_probability_home')*100:.1f}% with LLM explanation.\n"
-            f"4. 🏈 **SaturdaySlate (College Football)**: Dynamic Elo ratings active. Top teams: {top_cfb}.\n\n"
+            f"4. 🏈 **SaturdaySlate (College Football)**: Dynamic Elo ratings active for {current_year}. Top teams: {top_cfb}.\n\n"
             f"Ask me any question about upcoming games, spread edges, win probabilities, player injury news, or Monte Carlo simulations!"
         )
 

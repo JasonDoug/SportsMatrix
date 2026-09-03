@@ -86,7 +86,7 @@ def test_chatbot_endpoint():
 
 
 def test_mlb_predict_endpoint():
-    response = client.get("/api/v1/mlb/predict?date=2025-08-30")
+    response = client.get("/api/v1/mlb/predict")
     assert response.status_code == 200
     data = response.json()
     assert "predictions" in data

@@ -664,7 +664,7 @@ def get_sportsmatrix_dashboard():
 
         async function fetchMLB() {
             document.getElementById('mlb-out').innerText = 'Loading...';
-            const res = await fetch('/api/v1/mlb/predict?date=2025-08-30');
+            const res = await fetch('/api/v1/mlb/predict');
             const data = await res.json();
             document.getElementById('mlb-out').innerText = JSON.stringify(data, null, 2);
         }
