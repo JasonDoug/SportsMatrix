@@ -20,3 +20,4 @@ ENV/
 *.sqlite3
 .pytest_cache/
 catboost_info/
+sportsmatrix_config.json

@@ -1,5 +1,6 @@
 """
 SportsMatrix Pydantic AI Chatbot LLM Agent
+Supports OpenRouter, Local Ollama, Ollama Cloud, OpenAI, Gemini, Anthropic, and Mock/Test providers.
 Registers tool functions for querying Moneyball (MLB), NetPredict (Basketball),
 NoFreeLocks (NFL), and SaturdaySlate (CFB).
 """
@@ -23,7 +24,11 @@ for d in [MONEYBALL_DIR, NETPREDICT_DIR, NOFREELOCKS_DIR, SATURDAYSLATE_DIR]:
         sys.path.insert(0, d)
 
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
 from sportsmatrix.chatbot.schemas import ChatRequest, ChatResponse, ToolCallLog
+from sportsmatrix.chatbot.settings import SettingsConfig, load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -133,39 +138,91 @@ def tool_get_cfb_ratings(season: int = 2025) -> Dict[str, Any]:
         return {"error": str(e), "service": "SaturdaySlate CFB"}
 
 
-# --- PYDANTIC AI AGENT DEFINITION ---
-
-if os.environ.get("OPENAI_API_KEY"):
-    default_model = "openai:gpt-4o"
-elif os.environ.get("GEMINI_API_KEY"):
-    default_model = "google-gla:gemini-1.5-flash"
-elif os.environ.get("ANTHROPIC_API_KEY"):
-    default_model = "anthropic:claude-3-5-sonnet-latest"
-else:
-    default_model = "test"
-
-sports_agent = Agent(
-    default_model,
-    system_prompt=(
-        "You are SportsMatrix AI, the unified sports prediction and analytics intelligent assistant. "
-        "You have access to 4 underlying machine learning & statistical engines:\n"
-        "1. Moneyball (MLB Baseball)\n"
-        "2. NetPredict (Basketball: NBA, WNBA, NCAAM, NCAAW)\n"
-        "3. NoFreeLocks (NFL Football with LLM explanations)\n"
-        "4. SaturdaySlate (College Football CFB ratings & edge detection)\n\n"
-        "Always use your tools to query live predictions, matchup simulations, team ratings, and news extractions. "
-        "Provide clear, professional, data-backed recommendations with probabilities, margins, and market lines."
-    )
+SYSTEM_PROMPT = (
+    "You are SportsMatrix AI, the unified sports prediction and analytics intelligent assistant. "
+    "You have access to 4 underlying machine learning & statistical engines:\n"
+    "1. Moneyball (MLB Baseball)\n"
+    "2. NetPredict (Basketball: NBA, WNBA, NCAAM, NCAAW)\n"
+    "3. NoFreeLocks (NFL Football with LLM explanations)\n"
+    "4. SaturdaySlate (College Football CFB ratings & edge detection)\n\n"
+    "Always use your tools to query live predictions, matchup simulations, team ratings, and news extractions. "
+    "Provide clear, professional, data-backed recommendations with probabilities, margins, and market lines."
 )
 
-# Register tools with Pydantic AI agent
-sports_agent.tool_plain(tool_predict_mlb_slate)
-sports_agent.tool_plain(tool_simulate_mlb_matchup)
-sports_agent.tool_plain(tool_predict_basketball)
-sports_agent.tool_plain(tool_predict_nfl_game)
-sports_agent.tool_plain(tool_extract_nfl_news)
-sports_agent.tool_plain(tool_predict_cfb_slate)
-sports_agent.tool_plain(tool_get_cfb_ratings)
+
+def register_agent_tools(agent: Agent):
+    """Registers all 4 sport service tools with a Pydantic AI agent instance."""
+    agent.tool_plain(tool_predict_mlb_slate)
+    agent.tool_plain(tool_simulate_mlb_matchup)
+    agent.tool_plain(tool_predict_basketball)
+    agent.tool_plain(tool_predict_nfl_game)
+    agent.tool_plain(tool_extract_nfl_news)
+    agent.tool_plain(tool_predict_cfb_slate)
+    agent.tool_plain(tool_get_cfb_ratings)
+    return agent
+
+
+def create_pydantic_ai_agent(settings: SettingsConfig) -> Optional[Agent]:
+    """Builds a Pydantic AI Agent instance for the active provider."""
+    provider = settings.active_provider.lower()
+    model_name = settings.selected_model.strip()
+
+    try:
+        if provider == "openrouter":
+            api_key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+            if not api_key:
+                return None
+            p = OpenAIProvider(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+            m = OpenAIChatModel(model_name or "meta-llama/llama-3.3-70b-instruct", provider=p)
+            agent = Agent(m, system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        elif provider == "ollama_local":
+            base_url = (settings.ollama_local_base_url or "http://localhost:11434").rstrip("/") + "/v1"
+            p = OpenAIProvider(base_url=base_url, api_key="ollama")
+            m = OpenAIChatModel(model_name or "qwen2.5:7b", provider=p)
+            agent = Agent(m, system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        elif provider == "ollama_cloud":
+            base_url = (settings.ollama_cloud_base_url or "https://ollama.com").rstrip("/") + "/v1"
+            api_key = settings.ollama_cloud_api_key or "ollama"
+            p = OpenAIProvider(base_url=base_url, api_key=api_key)
+            m = OpenAIChatModel(model_name or "qwen2.5:72b", provider=p)
+            agent = Agent(m, system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        elif provider == "openai":
+            api_key = settings.openai_api_key or os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                return None
+            p = OpenAIProvider(api_key=api_key)
+            m = OpenAIChatModel(model_name or "gpt-4o", provider=p)
+            agent = Agent(m, system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        elif provider == "gemini":
+            api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+            if not api_key:
+                return None
+            os.environ["GEMINI_API_KEY"] = api_key
+            agent = Agent(f"google-gla:{model_name or 'gemini-1.5-flash'}", system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        elif provider == "anthropic":
+            api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                return None
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+            agent = Agent(f"anthropic:{model_name or 'claude-3-5-sonnet-latest'}", system_prompt=SYSTEM_PROMPT)
+            return register_agent_tools(agent)
+
+        else: # mock / test
+            return None
+
+    except Exception as e:
+        logger.warning(f"Failed to build Pydantic AI agent for {provider}: {e}")
+        return None
 
 
 # --- CHAT DISPATCHER ---
@@ -173,29 +230,36 @@ sports_agent.tool_plain(tool_get_cfb_ratings)
 def process_sports_chat(req: ChatRequest) -> ChatResponse:
     """
     Main entrypoint for SportsMatrix LLM Chat queries.
-    Uses Pydantic AI when API keys are available, or executes structured smart tool routing in test/offline mode.
+    Dynamically loads settings and uses Pydantic AI for active providers or fallback tool execution.
     """
+    settings = load_settings()
+    
+    # Allow prompt-level override of model or provider if specified
+    if req.model and ":" in req.model:
+        parts = req.model.split(":", 1)
+        settings.active_provider = parts[0]
+        settings.selected_model = parts[1]
+
     prompt_lower = req.prompt.lower()
     tools_used: List[ToolCallLog] = []
     service_sources: List[str] = []
 
-    # Check if an LLM API Key is configured for live Pydantic AI execution
-    has_api_key = any(env in os.environ for env in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"])
-
-    if has_api_key and req.model != "test":
+    # Attempt Pydantic AI Agent Execution
+    agent = create_pydantic_ai_agent(settings)
+    if agent is not None:
         try:
-            # Live Pydantic AI execution
-            run_result = sports_agent.run_sync(req.prompt)
+            run_result = agent.run_sync(req.prompt)
+            provider_label = f"{settings.active_provider.upper()} ({settings.selected_model})"
             return ChatResponse(
                 response=run_result.output,
                 conversation_id=req.conversation_id or "conv_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
                 tools_used=[],
-                service_sources=["SportsMatrix Pydantic AI Agent"]
+                service_sources=[f"Pydantic AI Agent [{provider_label}]"]
             )
         except Exception as e:
-            logger.warning(f"Live LLM run failed, falling back to intelligent tool execution: {e}")
+            logger.warning(f"Pydantic AI run failed for {settings.active_provider}, using fallback dispatcher: {e}")
 
-    # Intelligent tool routing execution mode
+    # Fallback Tool Execution Router Mode
     results_summary = []
 
     # 1. MLB / Baseball detection
