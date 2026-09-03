@@ -1,0 +1,303 @@
+"""
+SportsMatrix Pydantic AI Chatbot LLM Agent
+Registers tool functions for querying Moneyball (MLB), NetPredict (Basketball),
+NoFreeLocks (NFL), and SaturdaySlate (CFB).
+"""
+
+import sys
+import os
+import json
+import logging
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+
+# Path setup for subservices
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+MONEYBALL_DIR = os.path.join(PROJECT_ROOT, "sportservices", "moneyball")
+NETPREDICT_DIR = os.path.join(PROJECT_ROOT, "sportservices", "netpredict")
+NOFREELOCKS_DIR = os.path.join(PROJECT_ROOT, "sportservices", "nofreelocks", "src")
+SATURDAYSLATE_DIR = os.path.join(PROJECT_ROOT, "sportservices", "saturdayslate")
+
+for d in [MONEYBALL_DIR, NETPREDICT_DIR, NOFREELOCKS_DIR, SATURDAYSLATE_DIR]:
+    if d not in sys.path:
+        sys.path.insert(0, d)
+
+from pydantic_ai import Agent
+from sportsmatrix.chatbot.schemas import ChatRequest, ChatResponse, ToolCallLog
+
+logger = logging.getLogger(__name__)
+
+# --- TOOL IMPLEMENTATIONS ---
+
+def tool_predict_mlb_slate(date: str = "2025-08-30", model_type: str = "xgboost") -> Dict[str, Any]:
+    """Fetches daily slate predictions and win probabilities for MLB games (Moneyball Engine)."""
+    try:
+        from mlb_engine.server import get_slate_predictions
+        resp = get_slate_predictions(date=date, model_type=model_type)
+        return json.loads(resp.body.decode("utf-8"))
+    except Exception as e:
+        logger.error(f"Error calling MLB predict: {e}")
+        return {"error": str(e), "service": "Moneyball MLB"}
+
+
+def tool_simulate_mlb_matchup(home_team: str = "LAD", away_team: str = "SF", num_simulations: int = 10000) -> Dict[str, Any]:
+    """Runs a Monte Carlo game simulation for an MLB matchup (Moneyball Engine)."""
+    try:
+        from mlb_engine.server import run_simulation, SimulationRequest
+        req = SimulationRequest(home_team=home_team, away_team=away_team, num_simulations=num_simulations)
+        resp = run_simulation(req)
+        return json.loads(resp.body.decode("utf-8"))
+    except Exception as e:
+        logger.error(f"Error calling MLB simulate: {e}")
+        return {"error": str(e), "service": "Moneyball MLB"}
+
+
+def tool_predict_basketball(league: str = "nba", date: str = "2026-09-02") -> Dict[str, Any]:
+    """Fetches basketball game predictions for NBA, WNBA, NCAAM, or NCAAW (NetPredict Engine)."""
+    try:
+        from backend.app.main import get_league_predictions
+        return get_league_predictions(league=league, date=date)
+    except Exception as e:
+        logger.error(f"Error calling Basketball predict: {e}")
+        return {"error": str(e), "service": "NetPredict Basketball"}
+
+
+def tool_predict_nfl_game(
+    home_team: str = "KC",
+    away_team: str = "SF",
+    vegas_spread: float = -2.5,
+    vegas_total: float = 47.5,
+    include_explanation: bool = True
+) -> Dict[str, Any]:
+    """Predicts NFL game outcome, point margin, total, and LLM explanation (NoFreeLocks Engine)."""
+    try:
+        from nofreelocks.api.server import predict_game, GamePredictionRequest, ensemble_predictor
+        if ensemble_predictor is None or not ensemble_predictor.is_fitted:
+            from nofreelocks.data import generate_synthetic_nfl_data, preprocess_nfl_games
+            from nofreelocks.features import FeaturePipeline
+            from nofreelocks.models import EnsembleNFLPredictor
+            pipe = FeaturePipeline()
+            df_boot = generate_synthetic_nfl_data(seasons=[2022, 2023, 2024], seed=42)
+            df_clean = preprocess_nfl_games(df_boot)
+            df_feat = pipe.transform(df_clean)
+            X, y_win, y_spread, y_total = pipe.get_features_and_targets(df_feat)
+            ens = EnsembleNFLPredictor()
+            ens.fit_ensemble(df_clean, X, y_win, y_spread, y_total)
+            import nofreelocks.api.server as nfl_module
+            nfl_module.ensemble_predictor = ens
+        
+        req = GamePredictionRequest(
+            home_team=home_team,
+            away_team=away_team,
+            vegas_spread=vegas_spread,
+            vegas_total=vegas_total,
+            include_explanation=include_explanation
+        )
+        return predict_game(req)
+    except Exception as e:
+        logger.error(f"Error calling NFL predict: {e}")
+        return {"error": str(e), "service": "NoFreeLocks NFL"}
+
+
+def tool_extract_nfl_news(text: str) -> Dict[str, Any]:
+    """Extracts NFL player injury and roster news using NLP (NoFreeLocks Engine)."""
+    try:
+        from nofreelocks.api.server import extract_news_status, NewsExtractionRequest
+        req = NewsExtractionRequest(text=text)
+        return extract_news_status(req)
+    except Exception as e:
+        logger.error(f"Error calling NFL news extraction: {e}")
+        return {"error": str(e), "service": "NoFreeLocks NFL"}
+
+
+def tool_predict_cfb_slate(season: int = 2025, week: int = 13, team: Optional[str] = None) -> Dict[str, Any]:
+    """Fetches College Football game predictions and line edges (SaturdaySlate Engine)."""
+    try:
+        from src.api.server import predict_week, PredictRequest
+        req = PredictRequest(season=season, week=week, team=team)
+        results = predict_week(req)
+        return {"season": season, "week": week, "predictions": results}
+    except Exception as e:
+        logger.error(f"Error calling CFB predict: {e}")
+        return {"error": str(e), "service": "SaturdaySlate CFB"}
+
+
+def tool_get_cfb_ratings(season: int = 2025) -> Dict[str, Any]:
+    """Fetches dynamic Elo and Glicko-2 ratings for College Football teams (SaturdaySlate Engine)."""
+    try:
+        from src.api.server import get_team_ratings
+        ratings = get_team_ratings(season=season)
+        return {"season": season, "ratings_count": len(ratings), "ratings": [r.model_dump() for r in ratings[:15]]}
+    except Exception as e:
+        logger.error(f"Error calling CFB ratings: {e}")
+        return {"error": str(e), "service": "SaturdaySlate CFB"}
+
+
+# --- PYDANTIC AI AGENT DEFINITION ---
+
+if os.environ.get("OPENAI_API_KEY"):
+    default_model = "openai:gpt-4o"
+elif os.environ.get("GEMINI_API_KEY"):
+    default_model = "google-gla:gemini-1.5-flash"
+elif os.environ.get("ANTHROPIC_API_KEY"):
+    default_model = "anthropic:claude-3-5-sonnet-latest"
+else:
+    default_model = "test"
+
+sports_agent = Agent(
+    default_model,
+    system_prompt=(
+        "You are SportsMatrix AI, the unified sports prediction and analytics intelligent assistant. "
+        "You have access to 4 underlying machine learning & statistical engines:\n"
+        "1. Moneyball (MLB Baseball)\n"
+        "2. NetPredict (Basketball: NBA, WNBA, NCAAM, NCAAW)\n"
+        "3. NoFreeLocks (NFL Football with LLM explanations)\n"
+        "4. SaturdaySlate (College Football CFB ratings & edge detection)\n\n"
+        "Always use your tools to query live predictions, matchup simulations, team ratings, and news extractions. "
+        "Provide clear, professional, data-backed recommendations with probabilities, margins, and market lines."
+    )
+)
+
+# Register tools with Pydantic AI agent
+sports_agent.tool_plain(tool_predict_mlb_slate)
+sports_agent.tool_plain(tool_simulate_mlb_matchup)
+sports_agent.tool_plain(tool_predict_basketball)
+sports_agent.tool_plain(tool_predict_nfl_game)
+sports_agent.tool_plain(tool_extract_nfl_news)
+sports_agent.tool_plain(tool_predict_cfb_slate)
+sports_agent.tool_plain(tool_get_cfb_ratings)
+
+
+# --- CHAT DISPATCHER ---
+
+def process_sports_chat(req: ChatRequest) -> ChatResponse:
+    """
+    Main entrypoint for SportsMatrix LLM Chat queries.
+    Uses Pydantic AI when API keys are available, or executes structured smart tool routing in test/offline mode.
+    """
+    prompt_lower = req.prompt.lower()
+    tools_used: List[ToolCallLog] = []
+    service_sources: List[str] = []
+
+    # Check if an LLM API Key is configured for live Pydantic AI execution
+    has_api_key = any(env in os.environ for env in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"])
+
+    if has_api_key and req.model != "test":
+        try:
+            # Live Pydantic AI execution
+            run_result = sports_agent.run_sync(req.prompt)
+            return ChatResponse(
+                response=run_result.output,
+                conversation_id=req.conversation_id or "conv_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
+                tools_used=[],
+                service_sources=["SportsMatrix Pydantic AI Agent"]
+            )
+        except Exception as e:
+            logger.warning(f"Live LLM run failed, falling back to intelligent tool execution: {e}")
+
+    # Intelligent tool routing execution mode
+    results_summary = []
+
+    # 1. MLB / Baseball detection
+    if any(k in prompt_lower for k in ["mlb", "baseball", "red sox", "yankees", "dodgers", "giants", "moneyball"]):
+        service_sources.append("Moneyball (MLB)")
+        if "sim" in prompt_lower or "simulate" in prompt_lower:
+            sim_res = tool_simulate_mlb_matchup(home_team="LAD", away_team="SF", num_simulations=10000)
+            tools_used.append(ToolCallLog(tool_name="simulate_mlb_matchup", args={"home": "LAD", "away": "SF"}, summary="Ran 10,000 Monte Carlo simulations"))
+            results_summary.append(f"⚾ **MLB Monte Carlo Matchup Simulation (SF @ LAD)**:\n"
+                                   f"- Home Win Prob (LAD): {sim_res.get('home_win_prob')}\n"
+                                   f"- Away Win Prob (SF): {sim_res.get('away_win_prob')}\n"
+                                   f"- Projected Score: {sim_res.get('expected_score')}\n"
+                                   f"- Over 8.5 Runs Prob: {sim_res.get('over_8_5_prob')}")
+        else:
+            slate_res = tool_predict_mlb_slate(date="2025-08-30")
+            tools_used.append(ToolCallLog(tool_name="predict_mlb_slate", args={"date": "2025-08-30"}, summary=f"Retrieved {slate_res.get('total_games', 0)} MLB predictions"))
+            preds = slate_res.get("predictions", [])[:3]
+            pred_lines = "\n".join([f"- **{p['matchup']}**: Pick **{p['model_pick']}** (Win Prob: {p['pick_win_prob']}, Proj: {p['proj_score']}, EV: {p['expected_ev']})" for p in preds])
+            results_summary.append(f"⚾ **Moneyball MLB Slate Predictions (2025-08-30)**:\n"
+                                   f"- Total Games: {slate_res.get('total_games')}\n"
+                                   f"- Verified Hit Rate: {slate_res.get('hit_rate')}\n"
+                                   f"- Key Matches:\n{pred_lines}")
+
+    # 2. Basketball (NBA, WNBA, NCAAM, NCAAW) detection
+    if any(k in prompt_lower for k in ["nba", "wnba", "ncaam", "ncaaw", "basketball", "hoops", "netpredict"]):
+        service_sources.append("NetPredict (Basketball)")
+        league = "nba"
+        for lg in ["wnba", "ncaam", "ncaaw", "nba"]:
+            if lg in prompt_lower:
+                league = lg
+                break
+        bk_res = tool_predict_basketball(league=league, date="2026-09-02")
+        tools_used.append(ToolCallLog(tool_name="predict_basketball", args={"league": league, "date": "2026-09-02"}, summary=f"Evaluated {bk_res.get('games_count', 0)} {league.upper()} games"))
+        preds = bk_res.get("predictions", [])[:2]
+        pred_lines = []
+        for p in preds:
+            pred_obj = p.get("prediction", {})
+            pred_lines.append(f"- **Game {p.get('game_id')}**: Home Rating: {pred_obj.get('home_off_rating')}/{pred_obj.get('home_def_rating')}, Away Rating: {pred_obj.get('away_off_rating')}/{pred_obj.get('away_def_rating')}, Proj Spread: {pred_obj.get('predicted_spread')}, Proj Total: {pred_obj.get('predicted_total')}")
+        results_summary.append(f"🏀 **NetPredict {league.upper()} Predictions (2026-09-02)**:\n"
+                               f"- Odds Source: {bk_res.get('odds_source')}\n"
+                               f"- Evaluated Games ({bk_res.get('games_count')}):\n" + "\n".join(pred_lines))
+
+    # 3. NFL Football detection
+    if any(k in prompt_lower for k in ["nfl", "football", "chiefs", "kc", "49ers", "eagles", "patriots", "packers", "nofreelocks", "mahomes"]):
+        service_sources.append("NoFreeLocks (NFL)")
+        if "news" in prompt_lower or "injury" in prompt_lower:
+            news_res = tool_extract_nfl_news(req.prompt)
+            tools_used.append(ToolCallLog(tool_name="extract_nfl_news", args={"text": req.prompt[:30]}, summary="Extracted player news updates"))
+            results_summary.append(f"🏈 **NoFreeLocks NFL Roster & Injury News Extraction**:\n- Parsed Updates: {json.dumps(news_res.get('extracted_updates', []))}")
+        else:
+            nfl_res = tool_predict_nfl_game(home_team="KC", away_team="SF", vegas_spread=-2.5, vegas_total=47.5)
+            tools_used.append(ToolCallLog(tool_name="predict_nfl_game", args={"home": "KC", "away": "SF"}, summary="Evaluated KC vs SF NFL matchup"))
+            results_summary.append(f"🏈 **NoFreeLocks NFL Game Prediction (SF @ KC)**:\n"
+                                   f"- Home Win Prob (KC): {nfl_res.get('win_probability_home')*100:.1f}%\n"
+                                   f"- Predicted Margin: {nfl_res.get('predicted_margin')} pts (Vegas: {nfl_res.get('vegas_spread')})\n"
+                                   f"- Predicted Total: {nfl_res.get('predicted_total')} pts (Vegas: {nfl_res.get('vegas_total')})\n"
+                                   f"- LLM Narrative Rationale: {nfl_res.get('explanation', 'N/A')}")
+
+    # 4. College Football (CFB) detection
+    if any(k in prompt_lower for k in ["cfb", "college football", "saturdayslate", "sec", "big ten", "alabama", "georgia", "ohio state"]):
+        service_sources.append("SaturdaySlate (CFB)")
+        if "rating" in prompt_lower or "elo" in prompt_lower:
+            ratings_res = tool_get_cfb_ratings(season=2025)
+            tools_used.append(ToolCallLog(tool_name="get_cfb_ratings", args={"season": 2025}, summary="Fetched CFB team ratings"))
+            top_teams = ", ".join([f"{r['team']} (Elo: {r['elo_rating']})" for r in ratings_res.get("ratings", [])[:5]])
+            results_summary.append(f"🏈 **SaturdaySlate CFB Team Ratings (2025)**:\n- Top Teams: {top_teams}")
+        else:
+            cfb_res = tool_predict_cfb_slate(season=2025, week=13)
+            tools_used.append(ToolCallLog(tool_name="predict_cfb_slate", args={"season": 2025, "week": 13}, summary="Generated CFB Week 13 predictions"))
+            preds = cfb_res.get("predictions", [])[:3]
+            pred_lines = "\n".join([f"- **{p.get('matchup', 'Game')}**: Pick **{p.get('pick', 'N/A')}** (Spread: {p.get('market_spread')}, Line Edge: {p.get('spread_edge')})" for p in preds]) if preds else "Week 13 slate analyzed."
+            results_summary.append(f"🏈 **SaturdaySlate College Football Predictions (Season 2025 Week 13)**:\n{pred_lines}")
+
+    # If prompt is general or didn't trigger specific sport keywords, provide overview across all 4 services
+    if not results_summary:
+        service_sources = ["Moneyball (MLB)", "NetPredict (Basketball)", "NoFreeLocks (NFL)", "SaturdaySlate (CFB)"]
+        mlb = tool_predict_mlb_slate(date="2025-08-30")
+        bk = tool_predict_basketball(league="nba", date="2026-09-02")
+        nfl = tool_predict_nfl_game(home_team="KC", away_team="SF")
+        cfb = tool_get_cfb_ratings(season=2025)
+
+        tools_used.extend([
+            ToolCallLog(tool_name="predict_mlb_slate", args={}, summary="MLB slate summary"),
+            ToolCallLog(tool_name="predict_basketball", args={"league": "nba"}, summary="NBA predictions summary"),
+            ToolCallLog(tool_name="predict_nfl_game", args={"home": "KC", "away": "SF"}, summary="NFL matchup summary"),
+            ToolCallLog(tool_name="get_cfb_ratings", args={}, summary="CFB ratings summary"),
+        ])
+
+        top_cfb = ", ".join([r["team"] for r in cfb.get("ratings", [])[:3]])
+        results_summary.append(
+            f"Welcome to **SportsMatrix AI**! I am connected to all 4 prediction engines:\n\n"
+            f"1. ⚾ **Moneyball (MLB)**: {mlb.get('total_games', 0)} slate games analyzed for 2025-08-30 with a {mlb.get('hit_rate', 'N/A')} hit rate.\n"
+            f"2. 🏀 **NetPredict (NBA/WNBA/NCAAM/NCAAW)**: Live basketball analytics covering {bk.get('games_count', 0)} NBA games.\n"
+            f"3. 🏈 **NoFreeLocks (NFL)**: KC vs SF projected home win prob is {nfl.get('win_probability_home')*100:.1f}% with LLM explanation.\n"
+            f"4. 🏈 **SaturdaySlate (College Football)**: Dynamic Elo ratings active. Top teams: {top_cfb}.\n\n"
+            f"Ask me any question about upcoming games, spread edges, win probabilities, player injury news, or Monte Carlo simulations!"
+        )
+
+    final_text = "\n\n---\n\n".join(results_summary)
+    return ChatResponse(
+        response=final_text,
+        conversation_id=req.conversation_id or "conv_" + datetime.now().strftime("%Y%m%d_%H%M%S"),
+        tools_used=tools_used,
+        service_sources=service_sources
+    )
